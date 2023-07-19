@@ -97,7 +97,7 @@ def image_segmentations(
     """
 
     # Create directories for storing intermediate files and results
-    result_path = os.path.join(outdir, "result")
+    result_path = os.path.join(outdir)
     os.makedirs(result_path, exist_ok=True)
     directories = [
         "squared_frame",
@@ -178,7 +178,7 @@ def balance_image(
         feature_method (Callable[[Any], float]): methods for normalization [mean or mode]
     """
 
-    result_path = os.path.join(outdir, "result")
+    result_path = os.path.join(outdir)
     os.makedirs(result_path, exist_ok=True)
 
     for image_location in glob.glob(os.path.join(indir, "*.jpg")):
@@ -212,7 +212,7 @@ def balance_image(
         )
 
 
-def get_rgb(indir: str, outdir: str, datatype: str) -> str:
+def get_rgb(indir: str, outdir: str) -> str:
     """Get the mean and mode value of R, G, B channel in the images in the
     directory. Then, save it to a dataframe
 
@@ -228,43 +228,29 @@ def get_rgb(indir: str, outdir: str, datatype: str) -> str:
         pass
     else:
         os.makedirs(outdir)
-    assert len(imgs_path) != 0, f"The directory {indir} does not contain any images"
+    input_path = os.path.join(indir, "*.csv")
+    imgs_path = glob.glob(input_path)
+    assert (
+        len(imgs_path) != 0
+    ), f"The directory {indir} does not contain any images RGB csv"
     rgb_path = os.path.join(outdir, "RGB_values.csv")
     if os.path.exists(rgb_path):
         print(f"Skip! The raw RGB already features: \n {rgb_path}")
     else:
         with open(rgb_path, "w") as res:
             res.write("image,meanB,meanG,meanR,modeB,modeG,modeR\n")
-            if datatype == "image":
-                input_path = os.path.join(indir, "**.jpg")
-                imgs_path = glob.glob(input_path)
-                for img_path in imgs_path:
-                    img_id = os.path.basename(img_path)
-                    # Load image
-                    img = cv2.imread(img_path, cv2.IMREAD_COLOR)
-                    b, g, r = cv2.split(img)
-                    b_mode = st.mode(b.flatten())
-                    g_mode = st.mode(g.flatten())
-                    r_mode = st.mode(r.flatten())
+            for img_path in imgs_path:
+                img_id = os.path.basename(img_path.replace(".csv", ".jpg"))
+                # Load image
+                img = pd.read_csv(img_path)
+                b, g, r = img["B"], img["G"], img["R"]
+                b_mode = st.mode(b)
+                g_mode = st.mode(g)
+                r_mode = st.mode(r)
 
-                    res.write(
-                        f"{img_id},{np.mean(b)},{np.mean(g)}, {np.mean(r)}, {b_mode}, {g_mode},{r_mode}\n"
-                    )
-            else:
-                input_path = os.path.join(indir, "**.csv")
-                imgs_path = glob.glob(input_path)
-                for img_path in imgs_path:
-                    img_id = os.path.basename(img_path)
-                    # Load image
-                    img = pd.read_csv(img_path)
-                    b, g, r = img["B"], img["G"], img["R"]
-                    b_mode = st.mode(b.flatten())
-                    g_mode = st.mode(g.flatten())
-                    r_mode = st.mode(r.flatten())
-
-                    res.write(
-                        f"{img_id},{np.mean(b)},{np.mean(g)}, {np.mean(r)}, {b_mode}, {g_mode},{r_mode}\n"
-                    )
+                res.write(
+                    f"{img_id},{np.mean(b)},{np.mean(g)}, {np.mean(r)}, {b_mode}, {g_mode},{r_mode}\n"
+                )
     return rgb_path
 
 
@@ -369,22 +355,47 @@ def processing_images(
     constant: List = [60, 90, 30],
     feature_method: Callable[[Any], float] = np.mean,
 ) -> None:
-    # Step 1: Extract ROI, background, and squared_frame return RGB value
-    image_segmentations(
-        indir=indir,
-        outdir=outdir,
-        threshold=threshold,
-        dim=dim,
-        bg_index=bg_index,
-        roi_index=roi_index,
-    )
-    # Step 2: Balance images by normalizing using the background color and saving results
-    balance_image(
-        indir=indir,
-        outdir=outdir,
-        constant=constant,
-        feature_method=feature_method,
-    )
+    """Using the images in raw format, convert to csv, then normalize the images and save to csv format
+
+    Args:
+        indir (str): Input directory
+        outdir (str): Output directory
+        threshold (List, optional): Threshold for cutting edge Defaults to [(0, 110, 60), (80, 220, 160)].
+        dim (List, optional): Dimension for scale the ROI. Defaults to [740, 740].
+        bg_index (List, optional): The background index to cut. Defaults to [50, 60, 350, 360].
+        roi_index (int, optional): The roi region boudary. Defaults to 245.
+        constant (List, optional): The constant for background scale. Defaults to [60, 90, 30].
+        feature_method (Callable[[Any], float], optional): feature method. Defaults to np.mean.
+    """
+    if os.path.exists(os.path.join(outdir, "raw_roi")):
+        print("Already processed, remove outdir to reprocess")
+        return True
+    else:
+        # Step 1: Extract ROI, background, and squared_frame return RGB value
+        image_segmentations(
+            indir=indir,
+            outdir=outdir,
+            threshold=threshold,
+            dim=dim,
+            bg_index=bg_index,
+            roi_index=roi_index,
+        )
+        print("Complete extract ROI")
+        # Step 2: Balance images by normalizing using the background color and saving results
+        balance_image(
+            indir=indir,
+            outdir=outdir,
+            constant=constant,
+            feature_method=feature_method,
+        )
+        print("Complete balance images")
+        # Step3: Get the RGB value
+        for feature_type in ["raw_roi", "ratio_normalized_roi", "delta_normalized_roi"]:
+            get_rgb(
+                indir=os.path.join(outdir, feature_type),
+                outdir=os.path.join(outdir, feature_type),
+            )
+        print("Complete get RGB to csv")
 
 
 def end2end_model(
@@ -398,10 +409,8 @@ def end2end_model(
     prefix: str,
 ):
     # Load data
-    train_rgb = get_rgb(indir=train_rgb_path, outdir=outdir)
-    train = get_data(rgb_path=train_rgb, concentration=train_concentration)
-    test_rgb = get_rgb(indir=test_rgb_path, outdir=outdir)
-    test = get_data(rgb_path=test_rgb, concentration=test_concentration)
+    train = get_data(rgb_path=train_rgb_path, concentration=train_concentration)
+    test = get_data(rgb_path=test_rgb_path, concentration=test_concentration)
     # Train
     features = features.split(",")
     train_model = train_regression(
