@@ -1,4 +1,4 @@
-from smartsensor.smartsensor import processing_images, end2end_model
+from smartsensor.base import processing_images, end2end_model
 
 # Feature
 indir = "examples/raw_data"
